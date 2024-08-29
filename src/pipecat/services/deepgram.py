@@ -4,15 +4,12 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
-from typing import AsyncGenerator
-
 import aiohttp
-from loguru import logger
+
+from typing import AsyncGenerator
 
 from pipecat.frames.frames import (
     AudioRawFrame,
-    BotStartedSpeakingFrame,
-    BotStoppedSpeakingFrame,
     CancelFrame,
     EndFrame,
     ErrorFrame,
@@ -20,21 +17,25 @@ from pipecat.frames.frames import (
     InterimTranscriptionFrame,
     StartFrame,
     SystemFrame,
-    TranscriptionFrame,
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
     TTSStartedFrame,
     TTSStoppedFrame,
-)
+    TranscriptionFrame)
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.ai_services import AsyncAIService, TTSService
 from pipecat.utils.time import time_now_iso8601
+
+from loguru import logger
+
 
 # See .env.example for Deepgram configuration needed
 try:
     from deepgram import (
         DeepgramClient,
         DeepgramClientOptions,
-        LiveOptions,
         LiveTranscriptionEvents,
+        LiveOptions,
     )
 except ModuleNotFoundError as e:
     logger.error(f"Exception: {e}")
@@ -133,7 +134,8 @@ class DeepgramSTTService(AsyncAIService):
         self._connection = self._client.listen.asynclive.v("1")
         self._connection.on(LiveTranscriptionEvents.Transcript, self._on_message)
         self.mute_during_speech = mute_during_speech
-        self.bot_speaking = False
+        self.bot_speaking = True
+        self.muted = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -143,6 +145,7 @@ class DeepgramSTTService(AsyncAIService):
         if isinstance(frame, BotStartedSpeakingFrame):
             print("Bot Speaking")
             self.bot_speaking = True
+            self.muted = False
         elif isinstance(frame, BotStoppedSpeakingFrame):
             print("Bot Stopped Speaking")
             self.bot_speaking = False
@@ -151,6 +154,8 @@ class DeepgramSTTService(AsyncAIService):
         elif isinstance(frame, AudioRawFrame):
             # print(f"AUDIO RAW FRAME: {frame}")
             if not (self.mute_during_speech and self.bot_speaking):
+                await self._connection.send(frame.audio)
+            elif not self.muted:
                 await self._connection.send(frame.audio)
             else:
                 print("Bot Speaking")
@@ -163,6 +168,9 @@ class DeepgramSTTService(AsyncAIService):
             logger.debug(f"{self}: Connected to Deepgram")
         else:
             logger.error(f"{self}: Unable to connect to Deepgram")
+
+    async def mute(self):
+        self.muted = True
 
     async def stop(self, frame: EndFrame):
         await super().stop(frame)
