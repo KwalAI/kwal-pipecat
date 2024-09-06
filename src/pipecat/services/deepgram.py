@@ -145,7 +145,7 @@ class DeepgramSTTService(AsyncAIService):
         self._connection = self._client.listen.asynclive.v("1")
         self._connection.on(LiveTranscriptionEvents.Transcript, self._on_message)
         self.mute_during_speech = mute_during_speech
-        self.bot_speaking = True
+        self.bot_speaking = False
         self.muted = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
