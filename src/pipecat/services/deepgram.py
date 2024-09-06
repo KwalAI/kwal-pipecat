@@ -4,12 +4,15 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
-import aiohttp
-
 from typing import AsyncGenerator
+
+import aiohttp
+from loguru import logger
 
 from pipecat.frames.frames import (
     AudioRawFrame,
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
     CancelFrame,
     EndFrame,
     ErrorFrame,
@@ -17,45 +20,42 @@ from pipecat.frames.frames import (
     InterimTranscriptionFrame,
     StartFrame,
     SystemFrame,
-    BotStartedSpeakingFrame,
-    BotStoppedSpeakingFrame,
+    TranscriptionFrame,
     TTSStartedFrame,
     TTSStoppedFrame,
-    TranscriptionFrame)
+)
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.ai_services import AsyncAIService, TTSService
 from pipecat.utils.time import time_now_iso8601
-
-from loguru import logger
-
 
 # See .env.example for Deepgram configuration needed
 try:
     from deepgram import (
         DeepgramClient,
         DeepgramClientOptions,
-        LiveTranscriptionEvents,
         LiveOptions,
+        LiveTranscriptionEvents,
     )
 except ModuleNotFoundError as e:
     logger.error(f"Exception: {e}")
     logger.error(
-        "In order to use Deepgram, you need to `pip install pipecat-ai[deepgram]`. Also, set `DEEPGRAM_API_KEY` environment variable.")
+        "In order to use Deepgram, you need to `pip install pipecat-ai[deepgram]`. Also, set `DEEPGRAM_API_KEY` environment variable."
+    )
     raise Exception(f"Missing module: {e}")
 
 
 class DeepgramTTSService(TTSService):
-
     def __init__(
-            self,
-            *,
-            api_key: str,
-            aiohttp_session: aiohttp.ClientSession,
-            voice: str = "aura-helios-en",
-            base_url: str = "https://api.deepgram.com/v1/speak",
-            sample_rate: int = 16000,
-            encoding: str = "linear16",
-            **kwargs):
+        self,
+        *,
+        api_key: str,
+        aiohttp_session: aiohttp.ClientSession,
+        voice: str = "aura-helios-en",
+        base_url: str = "https://api.deepgram.com/v1/speak",
+        sample_rate: int = 16000,
+        encoding: str = "linear16",
+        **kwargs,
+    ):
         super().__init__(**kwargs)
 
         self._voice = voice
@@ -82,7 +82,9 @@ class DeepgramTTSService(TTSService):
 
         try:
             await self.start_ttfb_metrics()
-            async with self._aiohttp_session.post(request_url, headers=headers, json=body) as r:
+            async with self._aiohttp_session.post(
+                request_url, headers=headers, json=body
+            ) as r:
                 if r.status != 200:
                     response_text = await r.text()
                     # If we get a a "Bad Request: Input is unutterable", just print out a debug log.
@@ -93,8 +95,11 @@ class DeepgramTTSService(TTSService):
                         return
 
                     logger.error(
-                        f"{self} error getting audio (status: {r.status}, error: {response_text})")
-                    yield ErrorFrame(f"Error getting audio (status: {r.status}, error: {response_text})")
+                        f"{self} error getting audio (status: {r.status}, error: {response_text})"
+                    )
+                    yield ErrorFrame(
+                        f"Error getting audio (status: {r.status}, error: {response_text})"
+                    )
                     return
 
                 await self.start_tts_usage_metrics(text)
@@ -102,7 +107,9 @@ class DeepgramTTSService(TTSService):
                 await self.push_frame(TTSStartedFrame())
                 async for data in r.content:
                     await self.stop_ttfb_metrics()
-                    frame = AudioRawFrame(audio=data, sample_rate=self._sample_rate, num_channels=1)
+                    frame = AudioRawFrame(
+                        audio=data, sample_rate=self._sample_rate, num_channels=1
+                    )
                     yield frame
                 await self.push_frame(TTSStoppedFrame())
         except Exception as e:
@@ -110,27 +117,31 @@ class DeepgramTTSService(TTSService):
 
 
 class DeepgramSTTService(AsyncAIService):
-    def __init__(self,
-                 *,
-                 api_key: str,
-                 url: str = "",
-                 live_options: LiveOptions = LiveOptions(
-                     encoding="linear16",
-                     language="en-US",
-                     model="nova-2-conversationalai",
-                     sample_rate=16000,
-                     channels=1,
-                     interim_results=True,
-                     smart_format=True,
-                 ),
-                 mute_during_speech=False,
-                 **kwargs):
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        url: str = "",
+        live_options: LiveOptions = LiveOptions(
+            encoding="linear16",
+            language="en-US",
+            model="nova-2-conversationalai",
+            sample_rate=16000,
+            channels=1,
+            interim_results=True,
+            smart_format=True,
+        ),
+        mute_during_speech=False,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
 
         self._live_options = live_options
 
         self._client = DeepgramClient(
-            api_key, config=DeepgramClientOptions(url=url, options={"keepalive": "true"}))
+            api_key,
+            config=DeepgramClientOptions(url=url, options={"keepalive": "true"}),
+        )
         self._connection = self._client.listen.asynclive.v("1")
         self._connection.on(LiveTranscriptionEvents.Transcript, self._on_message)
         self.mute_during_speech = mute_during_speech
@@ -153,11 +164,9 @@ class DeepgramSTTService(AsyncAIService):
             await self.push_frame(frame, direction)
         elif isinstance(frame, AudioRawFrame):
             # print(f"AUDIO RAW FRAME: {frame}")
-            if not (self.mute_during_speech and self.bot_speaking):
+            if not (self.mute_during_speech and self.bot_speaking) and not self.muted:
                 await self._connection.send(frame.audio)
-            elif not self.muted:
-                await self._connection.send(frame.audio)
-            else:
+            elif not self.mute_during_speech and self.bot_speaking:
                 print("Bot Speaking")
         else:
             await self.queue_frame(frame, direction)
@@ -187,6 +196,10 @@ class DeepgramSTTService(AsyncAIService):
         transcript = result.channel.alternatives[0].transcript
         if len(transcript) > 0:
             if is_final:
-                await self.queue_frame(TranscriptionFrame(transcript, "", time_now_iso8601()))
+                await self.queue_frame(
+                    TranscriptionFrame(transcript, "", time_now_iso8601())
+                )
             else:
-                await self.queue_frame(InterimTranscriptionFrame(transcript, "", time_now_iso8601()))
+                await self.queue_frame(
+                    InterimTranscriptionFrame(transcript, "", time_now_iso8601())
+                )
