@@ -163,11 +163,13 @@ class DeepgramSTTService(AsyncAIService):
         if isinstance(frame, SystemFrame):
             await self.push_frame(frame, direction)
         elif isinstance(frame, AudioRawFrame):
-            # print(f"AUDIO RAW FRAME: {frame}")
+            print(f"AUDIO RAW FRAME: {frame}")
             if not (self.mute_during_speech and self.bot_speaking) and not self.muted:
                 await self._connection.send(frame.audio)
             elif not self.mute_during_speech and self.bot_speaking:
                 print("Bot Speaking")
+            else:
+                print("Muted")
         else:
             await self.queue_frame(frame, direction)
 
