@@ -168,7 +168,7 @@ class DeepgramSTTService(AsyncAIService):
             )
             if not (self.mute_during_speech and self.bot_speaking) and not self.muted:
                 await self._connection.send(frame.audio)
-            elif not self.mute_during_speech and self.bot_speaking:
+            elif self.bot_speaking:
                 print("Bot Speaking")
             else:
                 print("Muted")
@@ -182,7 +182,7 @@ class DeepgramSTTService(AsyncAIService):
         else:
             logger.error(f"{self}: Unable to connect to Deepgram")
 
-    async def mute(self):
+    def mute(self):
         self.muted = True
 
     async def stop(self, frame: EndFrame):
